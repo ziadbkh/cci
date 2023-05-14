@@ -1,7 +1,7 @@
 
 process SplitFastq {
     
-    conda "bioconda::fastqsplitter=1.2.0 "
+    conda (params.enable_conda ?  "bioconda::fastqsplitter=1.2.0 " : null)
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/fastqsplitter%3A1.2.0--py39hbf8eff0_3' :
         'quay.io/biocontainers/fastqsplitter:1.2.0--py310h1425a21_3' }"

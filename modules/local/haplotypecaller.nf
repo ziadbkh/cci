@@ -2,7 +2,7 @@
 process HAPLOTYPECALLER {
     tag "${sample_id} - ${interval.getName()}"
     
-    conda "bioconda::gatk4=4.4.0.0"
+    conda (params.enable_conda ?  "bioconda::gatk4=4.4.0.0" : null)
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/gatk4:4.4.0.0--py36hdfd78af_0':
         'quay.io/biocontainers/gatk4:4.4.0.0--py36hdfd78af_0' }"

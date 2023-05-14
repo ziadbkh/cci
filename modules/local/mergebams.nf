@@ -2,7 +2,7 @@
 process MERGEBAMS {
     tag "${sample_id}"
 
-    conda "bioconda::sambamba=1.0"
+    conda (params.enable_conda ?  "bioconda::sambamba=1.0" : null)
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/sambamba:1.0--h98b6b92_0':
         'quay.io/biocontainers/sambamba:1.0--h98b6b92_0' }"
