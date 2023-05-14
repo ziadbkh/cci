@@ -11,7 +11,7 @@ WorkflowCci.initialise(params, log)
 
 // TODO nf-core: Add all file path parameters for the pipeline to the list below
 // Check input path parameters to see if they exist
-def checkPathParamList = [ params.input, params.multiqc_config, params.fasta ]
+def checkPathParamList = [ params.input]
 for (param in checkPathParamList) { if (param) { file(param, checkIfExists: true) } }
 
 // Check mandatory parameters
@@ -22,11 +22,6 @@ if (params.input) { ch_input = file(params.input) } else { exit 1, 'Input sample
     CONFIG FILES
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-
-ch_multiqc_config          = Channel.fromPath("$projectDir/assets/multiqc_config.yml", checkIfExists: true)
-ch_multiqc_custom_config   = params.multiqc_config ? Channel.fromPath( params.multiqc_config, checkIfExists: true ) : Channel.empty()
-ch_multiqc_logo            = params.multiqc_logo   ? Channel.fromPath( params.multiqc_logo, checkIfExists: true ) : Channel.empty()
-ch_multiqc_custom_methods_description = params.multiqc_methods_description ? file(params.multiqc_methods_description, checkIfExists: true) : file("$projectDir/assets/methods_description_template.yml", checkIfExists: true)
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -48,9 +43,11 @@ include { INPUT_CHECK } from '../subworkflows/local/input_check'
 //
 // MODULE: Installed directly from nf-core/modules
 //
-include { FASTQC                      } from '../modules/nf-core/fastqc/main'
-include { MULTIQC                     } from '../modules/nf-core/multiqc/main'
-include { CUSTOM_DUMPSOFTWAREVERSIONS } from '../modules/nf-core/custom/dumpsoftwareversions/main'
+include { ALIGNANDSORT                  } from '../modules/local/alignandsort'
+include { MERGEBAMS                     } from '../modules/local/mergebams.nf'
+include { HAPLOTYPECALLER               } from '../modules/local/haplotypecaller.nf'
+include { MERGEVCFS                     } from '../modules/local/mergevcfs.nf'
+include { CUSTOM_DUMPSOFTWAREVERSIONS   } from '../modules/nf-core/custom/dumpsoftwareversions/main'
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -59,7 +56,6 @@ include { CUSTOM_DUMPSOFTWAREVERSIONS } from '../modules/nf-core/custom/dumpsoft
 */
 
 // Info required for completion email and summary
-def multiqc_report = []
 
 workflow CCI {
 
@@ -68,45 +64,109 @@ workflow CCI {
     //
     // SUBWORKFLOW: Read in samplesheet, validate and stage input files
     //
-    INPUT_CHECK (
-        ch_input
-    )
-    ch_versions = ch_versions.mix(INPUT_CHECK.out.versions)
+    
+    //INPUT_CHECK (    ch_input )
+    //ch_versions = ch_versions.mix(INPUT_CHECK.out.versions)
+    
 
-    //
-    // MODULE: Run FastQC
-    //
-    FASTQC (
-        INPUT_CHECK.out.reads
-    )
-    ch_versions = ch_versions.mix(FASTQC.out.versions.first())
 
+    /*Channel
+        .fromFilePairs(params.input + '*_R{1,2}*.fastq.gz', checkIfExists:true)
+        .map{[it[0], it[1][0].simpleName, it[1]]}
+        .set{ch_input_fastq}
+    */
+    
+    Channel
+        .fromPath( params.fasta, checkIfExists:true).first().set{ch_reference_genome}
+
+    Channel
+        .fromPath( params.fasta + '.{bwt,sa,ann,amb,pac}', checkIfExists:true).toSortedList().set{ch_reference_genome_extra_bwa}
+    
+    
+    ch_reference_genome.map{"${it.getParent()}/${it.getBaseName()}.dict"}
+    .combine(Channel
+            .fromPath( params.fasta + '.fai', checkIfExists:true)
+    )
+    .set{ch_reference_genome_extra_gatk}
+
+
+    Channel
+        .fromPath( params.intervals + '*scattered.interval_list' , checkIfExists:true).set{ch_intervals}
+
+    Channel
+        .fromPath( params.input, checkIfExists:true )
+        .splitCsv(header: true)
+        .map { 
+            row -> {
+            if (row.fastq2)
+                {    
+                    [row.sample_id, row.id, true, [row.fastq1, row.fastq2] ] 
+                }else{
+                    [row.sample_id, row.id, false, [row.fastq1] ]
+                }
+            }
+           
+        }
+        .set{ch_meta}
+    
+    ALIGNANDSORT(
+        ch_meta,
+        ch_reference_genome.combine(ch_reference_genome_extra_bwa).flatten().toSortedList()
+    )
+    
+    ALIGNANDSORT.out.aligned_and_sorted_bam
+    .groupTuple().join(
+        ALIGNANDSORT.out.aligned_and_sorted_bam_bai.groupTuple()
+    )
+    .branch {
+        singelton: it[1].size() <= 1
+        multiple: it[1].size() > 1
+    }
+    .set {
+        ch_sample_bams
+    }
+    
+    
+    MERGEBAMS(
+        ch_sample_bams.multiple
+    )
+    
+    
+    MERGEBAMS.out.merged_bam.join(MERGEBAMS.out.merged_bam_bai).mix(
+        ch_sample_bams.singelton.map{[it[0], it[1][0], it[2][0]]}
+    ).set{
+        ch_bams
+    }
+    
+    
+    HAPLOTYPECALLER(
+        ch_bams,
+        ch_reference_genome
+            .combine(ch_reference_genome_extra_gatk)
+            .flatten()
+            .toSortedList(),
+        ch_intervals
+
+    )
+    
+    HAPLOTYPECALLER.out.gvcf
+    .groupTuple()
+    .join(
+        HAPLOTYPECALLER.out.gvcf_tbi
+        .groupTuple()
+    ).set{ch_sample_gvcf}
+    
+    MERGEVCFS(
+        ch_sample_gvcf
+    )
+    
+    /*
     CUSTOM_DUMPSOFTWAREVERSIONS (
         ch_versions.unique().collectFile(name: 'collated_versions.yml')
     )
 
-    //
-    // MODULE: MultiQC
-    //
-    workflow_summary    = WorkflowCci.paramsSummaryMultiqc(workflow, summary_params)
-    ch_workflow_summary = Channel.value(workflow_summary)
-
-    methods_description    = WorkflowCci.methodsDescriptionText(workflow, ch_multiqc_custom_methods_description)
-    ch_methods_description = Channel.value(methods_description)
-
-    ch_multiqc_files = Channel.empty()
-    ch_multiqc_files = ch_multiqc_files.mix(ch_workflow_summary.collectFile(name: 'workflow_summary_mqc.yaml'))
-    ch_multiqc_files = ch_multiqc_files.mix(ch_methods_description.collectFile(name: 'methods_description_mqc.yaml'))
-    ch_multiqc_files = ch_multiqc_files.mix(CUSTOM_DUMPSOFTWAREVERSIONS.out.mqc_yml.collect())
-    ch_multiqc_files = ch_multiqc_files.mix(FASTQC.out.zip.collect{it[1]}.ifEmpty([]))
-
-    MULTIQC (
-        ch_multiqc_files.collect(),
-        ch_multiqc_config.toList(),
-        ch_multiqc_custom_config.toList(),
-        ch_multiqc_logo.toList()
-    )
-    multiqc_report = MULTIQC.out.report.toList()
+    */
+    
 }
 
 /*
