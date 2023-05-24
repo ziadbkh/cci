@@ -153,9 +153,14 @@ workflow CCI {
     
     ch_all_bams
     .join(ch_normal_samples)
-    .map{[it[0], it[1]]}
+    .view()
+
+    ch_all_bams
+    .join(ch_normal_samples)
+    .map{[it[0], it[1], it[2]]}
     .set{ch_bams}
 
+    ch_bams.view()
     HAPLOTYPECALLER(
         ch_bams,
         ch_reference_genome
