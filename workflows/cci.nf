@@ -113,8 +113,9 @@ workflow CCI {
     .map{[it[0], it[1], it[3], it[4]]}
     .set{ch_meta}
     
-    ch_meta_complete.
-    .filter{it[2] == "t" || it[2] == "tumor" || it[2] == "0"}
+    
+    ch_meta_complete
+    .filter{it[2] != "t" && it[2] != "tumor" && it[2] != "0"}
     .map{[it[0], it[2]]}
     .set{ch_normal_samples}
 
@@ -141,8 +142,11 @@ workflow CCI {
     )
     
     
-    MERGEBAMS.out.merged_bam.join(MERGEBAMS.out.merged_bam_bai).mix(
-        ch_sample_bams.singelton.map{[it[0], it[1][0], it[2][0]]}
+    MERGEBAMS.out.merged_bam.join(MERGEBAMS.out.merged_bam_bai)
+    .mix(
+        ch_sample_bams
+        .singelton
+        .map{[it[0], it[1][0], it[2][0]]}
     ).set{
         ch_all_bams
     }
