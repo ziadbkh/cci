@@ -100,15 +100,24 @@ workflow CCI {
             row -> {
             if (row.fastq2)
                 {    
-                    [row.sample_id, row.id, true, [row.fastq1, row.fastq2] ] 
+                    [row.sample_id, row.id, row.type.toLowerCase(), true, [row.fastq1, row.fastq2] ] 
                 }else{
-                    [row.sample_id, row.id, false, [row.fastq1] ]
+                    [row.sample_id, row.id, row.type.toLowerCase(), false, [row.fastq1] ]
                 }
             }
            
         }
-        .set{ch_meta}
+        .set{ch_meta_complete}
     
+    ch_meta_complete
+    .map{[it[0], it[1], it[3], it[4]]}
+    .set{ch_meta}
+    
+    ch_meta_complete.
+    .filter{it[2] == "t" || it[2] == "tumor" || it[2] == "0"}
+    .map{[it[0], it[2]]}
+    .set{ch_normal_samples}
+
     ALIGNANDSORT(
         ch_meta,
         ch_reference_genome.combine(ch_reference_genome_extra_bwa).flatten().toSortedList()
@@ -135,10 +144,14 @@ workflow CCI {
     MERGEBAMS.out.merged_bam.join(MERGEBAMS.out.merged_bam_bai).mix(
         ch_sample_bams.singelton.map{[it[0], it[1][0], it[2][0]]}
     ).set{
-        ch_bams
+        ch_all_bams
     }
     
-    
+    ch_all_bams
+    .join(ch_normal_samples)
+    .map{[it[0], it[1]]}
+    .set{ch_bams}
+
     HAPLOTYPECALLER(
         ch_bams,
         ch_reference_genome
